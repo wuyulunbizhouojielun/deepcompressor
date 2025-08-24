@@ -56,17 +56,32 @@ class LlmModelConfig(BaseModelConfig):
     def __post_init__(self):
         parts = self.name.split("-")
         # we first infer the size, it should be a string matching "$\d+[mb]$"
+        # family, size, variant = "", "", ""
+        # for i, part in enumerate(parts):
+        #     part = part.lower()
+        #     if part[-1] == "m" or part[-1] == "b":
+        #         _part = part[:-1].replace("x", "", 1)
+        #         if _part.isdigit():
+        #             size = part
+        #             family = "-".join(parts[:i])
+        #             if len(parts) > i + 1:
+        #                 variant = "-".join(parts[i + 1 :])
+        #             break
+
+        # 8.20 兼容小数模型
         family, size, variant = "", "", ""
         for i, part in enumerate(parts):
-            part = part.lower()
-            if part[-1] == "m" or part[-1] == "b":
-                _part = part[:-1].replace("x", "", 1)
-                if _part.isdigit():
-                    size = part
+            lower_part = part.lower()
+            if lower_part and lower_part[-1] in ("m", "b"):
+                core = lower_part[:-1].replace("x", "", 1)  # 去掉一次可能的 x
+                # 允许一个小数点：比如 1.5b / 13.2m
+                if core.replace(".", "", 1).isdigit():
+                    size = lower_part  # 保留原样 (如 1.5b)
                     family = "-".join(parts[:i])
                     if len(parts) > i + 1:
                         variant = "-".join(parts[i + 1 :])
                     break
+
         assert size, f"Cannot infer size from {self.name}"
         assert family, f"Cannot infer family from {self.name}"
         if not self.family:

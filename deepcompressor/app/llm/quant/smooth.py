@@ -17,6 +17,11 @@ from ..nn.struct import LlmModelStruct, LlmTransformerBlockStruct
 from .config import LlmQuantConfig
 from .utils import get_needs_inputs_fn, get_needs_outputs_fn
 
+from .bias_utils import bias_subtracted_tensors_cache  # 8.21 尝试减弱K_bias的影响
+
+extract_K_bias = False
+
+
 __all__ = ["smooth_llm"]
 
 
@@ -54,6 +59,21 @@ def smooth_llm_layer(  # noqa: C901
     if config.smooth.enabled_attn and needs_quant:
         logger.debug("- %s.%s", attn.name, attn.k_rkey)
         cache_key = f"{attn.name}.{attn.k_rkey}"
+        
+        # 8.21
+        global extract_K_bias
+        if extract_K_bias and layer_cache:
+            print("cutting off bias")
+            print("cutting off bias")
+            print("cutting off bias")
+            # 原始含 bias 的 K
+            k_outputs_cache = layer_cache[attn.k_name].outputs
+            # 构造去 bias 副本
+            k_bias = attn.k_proj.bias
+            k_outputs_cache_nobias = bias_subtracted_tensors_cache(k_outputs_cache, k_bias)
+        else:
+            k_outputs_cache_nobias = layer_cache[attn.k_name].outputs if layer_cache else None
+
         smooth_cache[cache_key] = smooth_attention(
             k_proj=attn.k_proj,
             q_proj=attn.q_proj,
@@ -62,7 +82,7 @@ def smooth_llm_layer(  # noqa: C901
             query_quantizer=Quantizer(config.opts, channels_dim=-1, key=attn.q_key),
             key_quantizer=Quantizer(config.opts, channels_dim=-1, key=attn.k_key),
             queries=layer_cache[attn.q_name].outputs if layer_cache else None,
-            keys=layer_cache[attn.k_name].outputs if layer_cache else None,
+            keys=k_outputs_cache_nobias,
             attn_q=attn.q,
             attn_k=attn.k,
             eval_inputs=layer_cache[attn.name].inputs if layer_cache else None,
@@ -73,6 +93,27 @@ def smooth_llm_layer(  # noqa: C901
             with_rope=attn.config.with_rope,
             develop_dtype=config.develop_dtype,
         )
+        
+        # smooth_cache[cache_key] = smooth_attention(
+        #     k_proj=attn.k_proj,
+        #     q_proj=attn.q_proj,
+        #     scale=smooth_cache.get(cache_key, None),
+        #     config=config.smooth.attn,
+        #     query_quantizer=Quantizer(config.opts, channels_dim=-1, key=attn.q_key),
+        #     key_quantizer=Quantizer(config.opts, channels_dim=-1, key=attn.k_key),
+        #     queries=layer_cache[attn.q_name].outputs if layer_cache else None,
+        #     keys=layer_cache[attn.k_name].outputs if layer_cache else None,
+        #     attn_q=attn.q,
+        #     attn_k=attn.k,
+        #     eval_inputs=layer_cache[attn.name].inputs if layer_cache else None,
+        #     eval_module=attn,
+        #     eval_kwargs=attn.filter_kwargs(layer_kwargs),
+        #     num_heads=attn.config.num_query_heads,
+        #     num_head_repeats=attn.config.num_head_repeats,
+        #     with_rope=attn.config.with_rope,
+        #     develop_dtype=config.develop_dtype,
+        # )
+
     # endregion
     # region qkv projection
     needs_quant = config.enabled_ipts and config.ipts.is_enabled_for(attn.qkv_proj_key)
@@ -217,5 +258,5 @@ def smooth_llm(
                 )
     else:
         for layer in model.backbone_struct.layer_structs:
-            smooth_llm_layer(layer=layer, config=config, smooth_cache=smooth_cache)
+            smooth_llm_layer(layer=layer, config=config, smooth_cache=smooth_cache)  # 8.21 strucy.py这块相当于把标准的transformer库或者torch.nn库的一些标准结构抽象出来，供量化过程使用
     return smooth_cache

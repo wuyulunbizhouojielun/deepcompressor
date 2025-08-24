@@ -69,6 +69,8 @@ def ptq(  # noqa: C901
     needs_smooth = quant and config.enabled_smooth
 
     load_model_path, load_path, save_path = "", None, None
+
+    # 8.14 管理缓存路径
     if load_dirpath:
         load_path = LlmQuantCacheConfig(
             rotation=os.path.join(load_dirpath, "rotation.pt"),
@@ -77,6 +79,7 @@ def ptq(  # noqa: C901
             wgts=os.path.join(load_dirpath, "wgts.pt"),
             acts=os.path.join(load_dirpath, "acts.pt"),
         )
+        # 如果是之前存了model.pt，直接跳过reorder和smootth
         load_model_path = os.path.join(load_dirpath, "model.pt")
         if os.path.exists(load_model_path):
             logger.info(f"* Found the model from {load_model_path}")
@@ -116,6 +119,7 @@ def ptq(  # noqa: C901
             load_from = cache.path.rotation
         elif os.path.exists(config.rotation.path):
             load_from = config.rotation.path
+        # 8.20 这里读取的是之前存下来的rotation matrix，提前读取只是不用再次给每层统计rotation，但是还是要算一次rotatoin的结果
         if load_from:
             logger.info(f"- Loading rotation from {load_from}")
             rotation = torch.load(load_from).to(dtype=torch.float64)
@@ -348,7 +352,7 @@ def main(config: LlmPtqRunConfig, logging_level: int = tools.logging.DEBUG) -> N
         elif config.save_model.lower() in ("true", "default"):
             save_dirpath, save_model = os.path.join(config.output.running_job_dirpath, "model"), True
         else:
-            save_dirpath, save_model = config.save_model, True
+            save_dirpath, save_model = config.save_model, True  # 看清楚了，这里runconfig里面的save_model对应路径
     else:
         save_model = False
     model = ptq(
@@ -356,8 +360,8 @@ def main(config: LlmPtqRunConfig, logging_level: int = tools.logging.DEBUG) -> N
         tokenizer=tokenizer,
         config=config.quant,
         cache=config.cache,
-        load_dirpath=config.load_from,
-        save_dirpath=save_dirpath,
+        load_dirpath=config.load_from,     # 这里和config load_from直接对应路径，指定之后各权重直接读取 --load_from /path/to/dir
+        save_dirpath=save_dirpath,           
         copy_on_save=config.copy_on_save,
         save_model=save_model,
     )

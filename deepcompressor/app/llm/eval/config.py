@@ -55,10 +55,16 @@ class LlmEvalConfig:
     evaluators: list[str] = field(
         default_factory=lambda: ["gptq"], metadata={omniconfig.ARGPARSE_KWARGS: {"nargs": "+", "type": str}}
     )
-    num_shot: int | None = None
+    num_shot: int | None = None  # None --> 4 for template difference 
     fewshot_as_multiturn: bool = False
     apply_chat_template: bool = False
 
+    # 8.20 针对代码问题、生成长度添加
+    max_new_tokens: int = 1024
+    confirm_run_unsafe_code: bool = False
+    parallelize: bool = False
+    
+    # 跟据evaluators过滤具体任务
     def __post_init__(self):
         if "zero-shot" in self.tasks:
             self.tasks.remove("zero-shot")
@@ -67,7 +73,7 @@ class LlmEvalConfig:
         self.evaluators = sorted({evaluator.lower() for evaluator in self.evaluators})
         for evaluator in self.evaluators:
             assert evaluator in ("lm_eval", "gptq", "longbench"), f"Invalid evaluator: {evaluator}"
-        if len(self.evaluators) == 1 and self.evaluators[0] == "gpq":
+        if len(self.evaluators) == 1 and self.evaluators[0] == "gptq":
             self.tasks = [task for task in self.tasks if task.startswith(("wikitext", "pile", "gsm8k"))]
             assert len(self.tasks) > 0, "No valid tasks for GPTQ evaluation"
 
@@ -106,10 +112,10 @@ class LlmEvalConfig:
         lm_max_seq_length = get_max_seq_length(model, tokenizer)
         max_seq_lengths = {2048, 4096, lm_max_seq_length}
         if self.max_seq_length < 0:
-            if self.max_seq_length == -1:
+            if self.max_seq_length == -1:   # 不指定的话默认从config里面提取
                 max_seq_length = lm_max_seq_length
             else:
-                max_seq_length = min(lm_max_seq_length, -self.max_seq_length)
+                max_seq_length = min(lm_max_seq_length, -self.max_seq_length)  # 似乎还是限制在了4096 可能会影响cot的发挥
             max_seq_lengths = [length for length in sorted(max_seq_lengths) if length <= max_seq_length]
         elif self.max_seq_length == 0:
             max_seq_lengths = [lm_max_seq_length]
@@ -137,8 +143,10 @@ class LlmEvalConfig:
             logger.info(f"- Batch_size: {self.batch_size}")
             rsts = {}
             tools.logging.Formatter.indent_inc()
-            for max_seq_length in max_seq_lengths:
-                logger.info(f"+ Max_seq_length: {max_seq_length}")
+            # 8.18 对于lm_eval评估reasoning任务，为了节约时间，每次就命令行直接指定就好了，不需要连续测两次
+            if evaluator_name == 'lm_eval':
+                assert len(max_seq_lengths) == 1
+                logger.info(f"+ Max_seq_length: {max_seq_lengths[0]}")
                 tools.logging.Formatter.indent_inc()
                 tools.logging.Formatter.indent_inc()
                 # set seed
@@ -148,12 +156,16 @@ class LlmEvalConfig:
                 np.random.seed(42)
                 random.seed(42)
                 # evaluate
+                # 8.20 添加其他配置
                 rst = evaluator.evaluate(
                     tasks=tasks,
-                    max_length=max_seq_length,
+                    max_length=max_seq_lengths[0],
                     num_shot=self.num_shot,
                     fewshot_as_multiturn=self.fewshot_as_multiturn,
                     apply_chat_template=self.apply_chat_template,
+                    max_new_tokens = self.max_new_tokens,
+                    confirm_run_unsafe_code = self.confirm_run_unsafe_code,
+                    parallelize = self.parallelize,
                 )
                 rst["model"] = model_name
                 tools.logging.Formatter.indent_dec()
@@ -161,12 +173,41 @@ class LlmEvalConfig:
                 tools.logging.Formatter.indent_inc()
                 tools.logging.info(self.make_table(rst), logger=logger)
                 tools.logging.Formatter.indent_dec()
-                rsts[max_seq_length] = rst
+                rsts[max_seq_lengths[0]] = rst
                 tools.logging.Formatter.indent_dec()
+            else:
+                for max_seq_length in max_seq_lengths:
+                    logger.info(f"+ Max_seq_length: {max_seq_length}")
+                    tools.logging.Formatter.indent_inc()
+                    tools.logging.Formatter.indent_inc()
+                    # set seed
+                    torch.manual_seed(42)
+                    torch.cuda.manual_seed(42)
+                    torch.cuda.manual_seed_all(42)
+                    np.random.seed(42)
+                    random.seed(42)
+                    # evaluate
+                    rst = evaluator.evaluate(
+                        tasks=tasks,
+                        max_length=max_seq_length,
+                        num_shot=self.num_shot,
+                        fewshot_as_multiturn=self.fewshot_as_multiturn,
+                        apply_chat_template=self.apply_chat_template,
+                    )
+                    rst["model"] = model_name
+                    tools.logging.Formatter.indent_dec()
+                    logger.info("- Results:")
+                    tools.logging.Formatter.indent_inc()
+                    tools.logging.info(self.make_table(rst), logger=logger)
+                    tools.logging.Formatter.indent_dec()
+                    rsts[max_seq_length] = rst
+                    tools.logging.Formatter.indent_dec()
+
             tools.logging.Formatter.indent_dec()
             results[evaluator_name] = rsts
         return results
-
+    
+    # 打印结果为markdown格式
     @staticmethod
     def make_table(rst: dict[str, dict[tp.Any, dict[str, tp.Any]]]) -> str:
         """Generate table of results.

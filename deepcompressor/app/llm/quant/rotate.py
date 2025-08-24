@@ -50,6 +50,8 @@ def rotate_llm(  # noqa: C901
     dtypes: list[torch.dtype] = []
     linears: list[torch.nn.Linear] = []
     size: float = 0
+
+    # 遍历所有linear 参数规模大于30B则先转移到cpu
     for m in model.module.modules():
         if isinstance(m, torch.nn.Linear):
             devices.append(m.weight.device)
@@ -58,7 +60,8 @@ def rotate_llm(  # noqa: C901
             size += m.weight.numel() / 1e9
     for linear in linears:
         linear.to(dtype=torch.float32, device="cpu" if size > 30 else None)
-
+    
+    # 迭代每个transformer block查看是否有rotate不支持的结构
     for block in model.iter_transformer_block_structs():
         assert not block.post_attn_norms, "Rotation is only supported for models without post-attention norms."
         assert not block.post_ffn_norm, "Rotation is only supported for models without post-FFN norms."
@@ -82,6 +85,8 @@ def rotate_llm(  # noqa: C901
     else:
         prev_modules = [backbone.norm_in]
         prev_out_channels_dims = 0
+
+    # 8.20 这里是按Quarot的做法 RMSnorm LayerNorm的α融入邻近的weight矩阵
     with tools.logging.redirect_tqdm():
         for layer in tqdm(layers, desc="Transforming norm and linear", dynamic_ncols=True):
             logger.debug(f"- Transforming norm and linear in {layer.name}")
@@ -116,8 +121,9 @@ def rotate_llm(  # noqa: C901
     )
     # endregion
     if rotation is None:
-        rotation = get_rotation_matrix(backbone.config.num_channels, random=config.random)
+        rotation = get_rotation_matrix(backbone.config.num_channels, random=config.random)  # 直接参考Quarot 获取Hardmard矩阵
     # region rotate embeddings
+    # 这里就直接左乘右乘得到的rotation matrix
     if backbone.proj_in is None:
         logger.debug(f"- Rotating {backbone.embed_tokens_name}")
         weight = backbone.embed_tokens.weight
@@ -136,7 +142,7 @@ def rotate_llm(  # noqa: C901
     # endregion
     down_proj = []
     # region rotate backbone layers
-    head_rotation = get_rotation_matrix(model.config.num_head_channels, random=config.random)
+    head_rotation = get_rotation_matrix(model.config.num_head_channels, random=config.random)  # 针对注意力头维度，细粒度不同
     with tools.logging.redirect_tqdm():
         for layer in tqdm(layers, desc="Rotating backbone layers", dynamic_ncols=True):
             logger.debug(f"- Rotating {layer.name}")
@@ -149,11 +155,12 @@ def rotate_llm(  # noqa: C901
             logger.debug(f"- Rotating {attn.out_proj_name} (out)")
             rotation = rotation.to(attn.out_proj.weight.device)
             rotate_out_channels(attn.out_proj.weight, rotation=rotation, bias=attn.out_proj.bias)
+            # 8.21 这里config.transformers对应配置文件里的rotation/transformer
             if attn.out_proj_key in config.transforms:
                 logger.debug(f"- Rotating {attn.v_proj_name} (out)")
-                rotate_out_channels(attn.v_proj.weight, rotation=head_rotation, bias=attn.v_proj.bias)
+                rotate_out_channels(attn.v_proj.weight, rotation=head_rotation, bias=attn.v_proj.bias) # 左乘 输出通道变换
                 logger.debug(f"- Rotating {attn.o_proj_name} (in)")
-                rotate_in_channels(attn.o_proj.weight, rotation=head_rotation)
+                rotate_in_channels(attn.o_proj.weight, rotation=head_rotation)  # 右乘 输入通道变换
             for fc_name, fc in zip(ffn.up_proj_names, ffn.up_projs, strict=True):
                 logger.debug(f"- Rotating {fc_name} (in)")
                 rotation = rotation.to(fc.weight.device)

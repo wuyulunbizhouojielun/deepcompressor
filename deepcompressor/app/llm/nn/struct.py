@@ -52,6 +52,15 @@ from transformers.models.qwen2.modeling_qwen2 import (
     Qwen2MLP,
     Qwen2Model,
 )
+from transformers.models.qwen3.modeling_qwen3 import (
+    Qwen3Attention,
+    Qwen3Config,
+    Qwen3DecoderLayer,
+    Qwen3ForCausalLM,
+    Qwen3ForSequenceClassification,
+    Qwen3MLP,
+    Qwen3Model,
+)
 from transformers.models.t5.modeling_t5 import (
     T5Attention,
     T5Block,
@@ -91,22 +100,23 @@ __all__ = [
 
 # region type aliases
 ATTENTION_CLS = tp.Union[
-    LlamaAttention, MistralAttention, MixtralAttention, Qwen2Attention, T5Attention, Gemma2Attention
+    LlamaAttention, MistralAttention, MixtralAttention, Qwen2Attention, T5Attention, Gemma2Attention, Qwen3Attention
 ]
 FEEDFORWARD_CLS = tp.Union[
-    LlamaMLP, MistralMLP, MixtralSparseMoeBlock, Qwen2MLP, T5DenseActDense, T5DenseGatedActDense, Gemma2MLP
+    LlamaMLP, MistralMLP, MixtralSparseMoeBlock, Qwen2MLP, T5DenseActDense, T5DenseGatedActDense, Gemma2MLP, Qwen3MLP
 ]
 TRANSFORMER_BLOCK_CLS = tp.Union[
-    LlamaDecoderLayer, MistralDecoderLayer, MixtralDecoderLayer, Qwen2DecoderLayer, T5Block, Gemma2DecoderLayer
+    LlamaDecoderLayer, MistralDecoderLayer, MixtralDecoderLayer, Qwen2DecoderLayer, T5Block, Gemma2DecoderLayer, Qwen3DecoderLayer
 ]
-TRANSFORMER_CLS = tp.Union[LlamaModel, MistralModel, MixtralModel, Qwen2Model, T5Stack, Gemma2Model]
-CASUALLM_CLS = tp.Union[LlamaForCausalLM, MistralForCausalLM, MixtralForCausalLM, Qwen2ForCausalLM, Gemma2ForCausalLM]
+TRANSFORMER_CLS = tp.Union[LlamaModel, MistralModel, MixtralModel, Qwen2Model, T5Stack, Gemma2Model, Qwen3Model]
+CASUALLM_CLS = tp.Union[LlamaForCausalLM, MistralForCausalLM, MixtralForCausalLM, Qwen2ForCausalLM, Gemma2ForCausalLM, Qwen3ForCausalLM]
 SEQCLSLM_CLS = tp.Union[
     LlamaForSequenceClassification,
     MistralForSequenceClassification,
     MixtralForSequenceClassification,
     Qwen2ForSequenceClassification,
     Gemma2ForSequenceClassification,
+    Qwen3ForSequenceClassification,
 ]
 # endregion
 
@@ -274,7 +284,7 @@ class LlmSelfAttentionStruct(SelfAttentionStruct):
                 "use_cache",
                 "output_attentions",
             )
-        elif isinstance(module, (LlamaAttention, MistralAttention, MixtralAttention, Qwen2Attention, Gemma2Attention)):
+        elif isinstance(module, (LlamaAttention, MistralAttention, MixtralAttention, Qwen2Attention, Gemma2Attention, Qwen3Attention)):
             with_rope = True
             num_query_heads = module.config.num_attention_heads
             num_key_value_heads = module.config.num_key_value_heads
@@ -358,7 +368,7 @@ class LlmFeedForwardStruct(FeedForwardStruct):
         idx: int = 0,
         **kwargs,
     ) -> "LlmFeedForwardStruct":
-        if isinstance(module, (LlamaMLP, MistralMLP, Qwen2MLP, Gemma2MLP)):
+        if isinstance(module, (LlamaMLP, MistralMLP, Qwen2MLP, Gemma2MLP, Qwen3MLP)):
             if parent is not None:
                 assert parent.config.intermediate_act_type.endswith("_glu")
                 act_type = parent.config.intermediate_act_type
@@ -553,7 +563,7 @@ class LlmTransformerBlockStruct(TransformerBlockStruct):
         **kwargs,
     ) -> "LlmTransformerBlockStruct":
         if isinstance(
-            module, (LlamaDecoderLayer, MistralDecoderLayer, Qwen2DecoderLayer, MixtralDecoderLayer, Gemma2DecoderLayer)
+            module, (LlamaDecoderLayer, MistralDecoderLayer, Qwen2DecoderLayer, MixtralDecoderLayer, Gemma2DecoderLayer, Qwen3DecoderLayer)
         ):
             pre_attn_norms, attns = [module.input_layernorm], [module.self_attn]
             pre_attn_norm_rnames, attn_rnames = ["input_layernorm"], ["self_attn"]
@@ -728,7 +738,7 @@ class LlmTransformerStruct(BaseTransformerStruct):
         idx: int = 0,
         **kwargs,
     ) -> "LlmTransformerStruct":
-        if isinstance(module, (LlamaModel, MistralModel, MixtralModel, Qwen2Model, Gemma2Model)):
+        if isinstance(module, (LlamaModel, MistralModel, MixtralModel, Qwen2Model, Gemma2Model, Qwen3Model)):
             embed_tokens, embed_positions = module.embed_tokens, None
             layers = module.layers
             norm_in, norm_out = None, module.norm
@@ -884,7 +894,7 @@ class LlmModelStruct(BaseModuleStruct):
         else:
             raise ValueError(f"Unsupported model type: {type(model)}")
         config = backbone.config
-        if isinstance(config, (LlamaConfig, MistralConfig, MixtralConfig, Qwen2Config, Gemma2Config)):
+        if isinstance(config, (LlamaConfig, MistralConfig, MixtralConfig, Qwen2Config, Gemma2Config, Qwen3Config)):
             config_struct = LlmConfigStruct(
                 hidden_size=config.hidden_size,
                 inner_size=config.num_attention_heads * config.head_dim

@@ -28,6 +28,8 @@ __all__ = [
 ]
 
 
+# 配置类（例如 LlmPtqRunConfig）通过 @configclass 装饰器注册到 ConfigParser 中。实际读取配置的过程是在运行时由 Omniconfig 完成的，例如你在命令行上传递配置文件路径或其他参数时，parser 会调用内部逻辑加载并解析 YAML 文件，将其内容映射到配置类的各个字段中
+
 @configclass
 @dataclass
 class LlmPtqRunConfig:

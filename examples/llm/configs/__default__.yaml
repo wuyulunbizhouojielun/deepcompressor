@@ -20,10 +20,16 @@ eval:
   max_seq_length: -4096
   evaluators:
   - gptq
+  num_shot: null
+  fewshot_as_multiturn: false
+  apply_chat_template: false
+  max_new_tokens: 1024
+  confirm_run_unsafe_code: false
+  parallelize: false
 quant:
   calib:
     data: pileval
-    path: mit-han-lab/pile-val-backup
+    path: /home/zhuhuixing/Projects/code/source/Quantized-Reasoning-Models/datasets/pile-val-backup
     num_samples: 128
     seq_length: 1024
     min_seq_length: 0
